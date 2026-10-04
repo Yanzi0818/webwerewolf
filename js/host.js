@@ -385,7 +385,7 @@ function resolveVote(room) {
 }
 
 function queueLastWords(room, playerIds, nextPhase) {
-	const queue = [...new Set(playerIds || [])].filter((playerId) => room.players?.[playerId]?.isAlive === false);
+	const queue = [...new Set(playerIds || [])].filter((playerId) => room.players?.[playerId]?.isAlive === false && !room.kickedPlayers?.[playerId]);
 	if (!queue.length) return { ...room, phase: nextPhase };
 
 	const firstSpeaker = room.players[queue[0]];
@@ -457,7 +457,12 @@ async function startGame(roomRef, room) {
 			lastEvent: '遊戲開始，請所有玩家確認底牌。'
 		};
 	});
-	if (!result.committed) showMessage('無法開始，請確認人數、準備狀態與房間狀態。');
+	if (result.committed) {
+		await remove(ref(db, `wolfChats/${roomRef.key}`));
+		await remove(ref(db, `dayChats/${roomRef.key}`));
+	} else {
+		showMessage('無法開始，請確認人數、準備狀態與房間狀態。');
+	}
 }
 
 async function restartGame(roomRef) {
@@ -488,7 +493,83 @@ async function restartGame(roomRef) {
 			lastEvent: '上一局已結束，請所有玩家重新準備。'
 		};
 	});
-	if (result.committed) await remove(ref(db, `wolfChats/${roomRef.key}`));
+	if (result.committed) {
+		await remove(ref(db, `wolfChats/${roomRef.key}`));
+		await remove(ref(db, `dayChats/${roomRef.key}`));
+	}
+	return result.committed;
+}
+
+async function kickPlayer(roomRef, playerId) {
+	const result = await runTransaction(roomRef, (room) => {
+		const player = room?.players?.[playerId];
+		if (!player) return;
+
+		const seat = Number(player.seat);
+		let nextRoom = {
+			...room,
+			players: { ...room.players },
+			kickedPlayers: { ...(room.kickedPlayers || {}), [playerId]: true }
+		};
+		if (room.status === 'PLAYING') {
+			nextRoom.players[playerId] = { ...player, isAlive: false, isReady: false, canVote: false, kicked: true };
+		} else {
+			delete nextRoom.players[playerId];
+		}
+
+		const votes = { ...(room.votes || {}) };
+		for (const [voterId, targetSeat] of Object.entries(votes)) {
+			if (voterId === playerId || Number(targetSeat) === seat) delete votes[voterId];
+		}
+		nextRoom.votes = votes;
+
+		const actions = { ...(room.nightActions || {}) };
+		for (const actionKey of ['wolfKillTarget', 'witchPoisonTarget', 'seerCheckTarget', 'hunterShotTarget']) {
+			if (Number(actions[actionKey]) === seat) actions[actionKey] = null;
+		}
+		if (!actions.wolfKillTarget) actions.witchSave = false;
+		nextRoom.nightActions = actions;
+		nextRoom.lastEvent = `${player.name} 已被房主踢出房間。`;
+
+		if (room.status !== 'PLAYING') return nextRoom;
+
+		if (room.phase === 'HUNTER_SHOT' && room.pendingHunterId === playerId) {
+			const afterShotPhase = room.phaseAfterHunterShot || 'DAY_RESULT';
+			const remainingDeaths = (room.pendingLastWordsQueue || []).filter((id) => id !== playerId);
+			const { pendingHunterId, phaseAfterHunterShot, pendingLastWordsQueue, ...roomWithoutHunter } = nextRoom;
+			nextRoom = queueLastWords(roomWithoutHunter, remainingDeaths, afterShotPhase);
+			nextRoom.phaseEndsAt = Date.now() + getPhaseDuration(nextRoom, nextRoom.phase) * 1000;
+		}
+
+		if (nextRoom.phase === 'LAST_WORDS' && nextRoom.lastWordsQueue?.includes(playerId)) {
+			const remainingQueue = nextRoom.lastWordsQueue.filter((id) => id !== playerId);
+			if (!remainingQueue.length) {
+				const { lastWordsQueue, lastWordsIndex, lastWordsPlayerId, nextPhaseAfterLastWords, ...roomWithoutWords } = nextRoom;
+				nextRoom = { ...roomWithoutWords, phase: nextPhaseAfterLastWords || 'DAY_RESULT' };
+				nextRoom.phaseEndsAt = Date.now() + getPhaseDuration(nextRoom, nextRoom.phase) * 1000;
+			} else {
+				const currentSpeakerIndex = remainingQueue.indexOf(nextRoom.lastWordsPlayerId);
+				if (currentSpeakerIndex >= 0) {
+					nextRoom.lastWordsQueue = remainingQueue;
+					nextRoom.lastWordsIndex = currentSpeakerIndex;
+				} else {
+					nextRoom = queueLastWords(nextRoom, remainingQueue, nextRoom.nextPhaseAfterLastWords || 'DAY_RESULT');
+					nextRoom.phaseEndsAt = Date.now() + getPhaseDuration(nextRoom, 'LAST_WORDS') * 1000;
+				}
+			}
+		}
+
+		const winner = nextRoom.phase === 'HUNTER_SHOT' || nextRoom.phase === 'LAST_WORDS'
+			? null
+			: hasGameWinner(nextRoom.players, nextRoom.privateRoles);
+		if (winner) {
+			nextRoom.status = 'ENDED';
+			nextRoom.phase = 'GAME_OVER';
+			nextRoom.phaseEndsAt = 0;
+			nextRoom.lastEvent = winner;
+		}
+		return nextRoom;
+	});
 	return result.committed;
 }
 
@@ -669,6 +750,7 @@ function initHostDashboard() {
 		if (!confirmed) return;
 		await remove(roomRef);
 		await remove(ref(db, `wolfChats/${roomId}`));
+		await remove(ref(db, `dayChats/${roomId}`));
 		window.location.href = 'setting.html';
 	});
 
@@ -705,14 +787,34 @@ function initHostDashboard() {
 			const item = document.createElement('li');
 			const seat = document.createElement('strong');
 			const name = document.createElement('span');
+			const role = document.createElement('span');
 			const state = document.createElement('span');
+			const kickButton = document.createElement('button');
 			seat.textContent = String(player.seat).padStart(2, '0');
 			name.textContent = player.name;
+			const roleKey = currentRoom.privateRoles?.[playerId];
+			role.className = 'player-role';
+			role.textContent = roleKey ? ROLES[roleKey]?.name || roleKey : '未發牌';
 			state.className = `player-state${player.isAlive === false ? ' is-dead' : ''}`;
-			state.textContent = player.isAlive === false
+			state.textContent = player.kicked
+				? '已踢出'
+				: player.isAlive === false
 				? playerId === currentRoom.lastWordsPlayerId ? '遺言中' : '出局'
 				: playing ? '在場' : player.isReady ? '已準備' : '未準備';
-			item.append(seat, name, state);
+			kickButton.type = 'button';
+			kickButton.className = 'btn btn-danger btn-compact kick-player-button';
+			kickButton.textContent = '踢出';
+			kickButton.title = `踢出 ${player.name}`;
+			kickButton.addEventListener('click', async () => {
+				if (!window.confirm(`確定要踢出 ${player.name} 嗎？`)) return;
+				kickButton.disabled = true;
+				const kicked = await kickPlayer(roomRef, playerId);
+				if (!kicked) {
+					messageElement.textContent = '踢出失敗，玩家可能已離開房間。';
+					kickButton.disabled = false;
+				}
+			});
+			item.append(seat, name, role, state, kickButton);
 			return item;
 		}));
 		emptyPlayers.hidden = players.length > 0;
@@ -784,6 +886,7 @@ document.addEventListener('DOMContentLoaded', () => {
 						speechTime: Number(document.getElementById('speech-time').value)
 					},
 					players: {},
+					kickedPlayers: {},
 					nightActions: {
 						wolfKillTarget: null,
 						witchSave: false,

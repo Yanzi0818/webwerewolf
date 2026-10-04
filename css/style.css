@@ -568,6 +568,18 @@ body.dark-theme {
     padding: 5px 0;
 }
 
+.player-role {
+    min-width: 58px;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+.kick-player-button {
+    flex: 0 0 auto;
+    padding: 6px 9px;
+    font-size: 0.72rem;
+}
+
 .player-state,
 .mini-state {
     margin-left: auto;

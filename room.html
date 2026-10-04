@@ -41,6 +41,21 @@
 			<p class="role-description" id="role-description">房主開始遊戲後，身份會出現在這裡。</p>
 		</section>
 
+		<section class="panel wolf-chat-panel" id="day-chat-panel" aria-labelledby="day-chat-title" hidden>
+			<div class="panel-heading">
+				<div>
+					<p class="eyebrow">白天討論</p>
+					<h2 id="day-chat-title">公開對話</h2>
+				</div>
+				<span class="status-pill">全員可見</span>
+			</div>
+			<ol class="wolf-chat-messages" id="day-chat-messages" aria-live="polite" aria-relevant="additions"></ol>
+			<form class="wolf-chat-form" id="day-chat-form">
+				<input id="day-chat-input" type="text" maxlength="300" autocomplete="off" placeholder="輸入白天討論訊息" aria-label="白天對話訊息" disabled>
+				<button class="btn btn-primary btn-compact" id="day-chat-send" type="submit" disabled>送出</button>
+			</form>
+		</section>
+
 		<section class="panel wolf-chat-panel" id="wolf-chat-panel" aria-labelledby="wolf-chat-title" hidden>
 			<div class="panel-heading">
 				<div>

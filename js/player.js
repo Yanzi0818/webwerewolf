@@ -16,9 +16,19 @@ const PHASE_LABELS = {
 };
 
 function getPlayerStore() {
-    const roomId = sessionStorage.getItem('werewolf_roomId');
-    const playerName = sessionStorage.getItem('werewolf_playerName');
-    const playerId = sessionStorage.getItem('werewolf_playerId');
+    const params = new URLSearchParams(window.location.search);
+    const roomId = sessionStorage.getItem('werewolf_roomId') || params.get('room');
+    const playerId = sessionStorage.getItem('werewolf_playerId') || params.get('player');
+    let playerName = sessionStorage.getItem('werewolf_playerName');
+    if (!playerName && roomId && playerId) {
+        try {
+            const savedPlayer = JSON.parse(localStorage.getItem(`werewolf-player:${roomId}:${playerId}`) || 'null');
+            playerName = savedPlayer?.playerName || '';
+        } catch {
+            playerName = '';
+        }
+    }
+    if (roomId && playerName && playerId) savePlayerSession(roomId, playerName, playerId);
     return { roomId, playerName, playerId };
 }
 
@@ -26,6 +36,11 @@ function savePlayerSession(roomId, playerName, playerId) {
     sessionStorage.setItem('werewolf_roomId', roomId);
     sessionStorage.setItem('werewolf_playerName', playerName);
     sessionStorage.setItem('werewolf_playerId', playerId);
+    try {
+        localStorage.setItem(`werewolf-player:${roomId}:${playerId}`, JSON.stringify({ roomId, playerName, playerId }));
+    } catch {
+        // The active tab can still resume through sessionStorage if persistent storage is unavailable.
+    }
 }
 
 function nextAvailableSeat(players = {}) {
@@ -51,10 +66,11 @@ function renderPlayerList(players = {}, editablePlayerId = '') {
         const item = document.createElement('li');
         item.className = 'player-mini-card';
         if (playerId === editablePlayerId) item.classList.add('is-me');
+        if (player.kicked) item.classList.add('is-dead');
         item.innerHTML = `
             <span class="seat-label">${player.seat || '--'}</span>
             <span class="player-name">${player.name || '匿名玩家'}</span>
-            <span class="mini-state ${player.isReady ? 'ready' : ''}">${player.isReady ? '準備' : '未準備'}</span>
+            <span class="mini-state ${player.isReady ? 'ready' : ''}">${player.kicked ? '已踢出' : player.isReady ? '準備' : '未準備'}</span>
         `;
         list.appendChild(item);
     });
@@ -182,13 +198,20 @@ function showPlayerActions(room, playerId, playerData, roleKey) {
             const potions = room.witchPotions || {};
             const antidoteUsed = Boolean(potions.antidoteUsed);
             const poisonUsed = Boolean(potions.poisonUsed);
+            const isSelfTarget = targetSeat === Number(playerData.seat);
             const actionButtons = document.createElement('div');
             actionButtons.className = 'action-list';
 
             const saveButton = document.createElement('button');
             saveButton.type = 'button';
             saveButton.className = `choice-button ${currentSaved ? 'selected' : ''}`;
-            saveButton.textContent = antidoteUsed ? '解藥已用完' : currentSaved ? '本夜已選擇解藥' : targetSeat ? `使用解藥救回座位 ${targetSeat}` : '解藥可用';
+            saveButton.textContent = antidoteUsed
+                ? '解藥已用完'
+                : currentSaved
+                    ? '本夜已選擇解藥'
+                    : isSelfTarget
+                        ? `使用解藥自救（座位 ${targetSeat}）`
+                        : targetSeat ? `使用解藥救回座位 ${targetSeat}` : '解藥可用';
             saveButton.disabled = antidoteUsed || currentSaved || Boolean(poisonTarget) || !targetSeat;
             saveButton.addEventListener('click', async () => {
                 if (!targetSeat) {
@@ -212,7 +235,7 @@ function showPlayerActions(room, playerId, playerData, roleKey) {
 
             const potionStatus = `解藥${antidoteUsed ? '已用完' : '可用'}；毒藥${poisonUsed ? '已用完' : '可用'}。`;
             const actionStatus = currentSaved
-                ? `本夜已選擇解藥，將救回座位 ${targetSeat}；毒藥不能同夜使用。`
+                ? `本夜已選擇解藥，將${isSelfTarget ? '自救' : `救回座位 ${targetSeat}`}；毒藥不能同夜使用。`
                 : poisonTarget
                     ? `本夜已選擇毒殺座位 ${poisonTarget}；解藥不能同夜使用。`
                     : targetSeat
@@ -278,7 +301,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const playerId = `${roomId}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
             savePlayerSession(roomId, playerName, playerId);
-            window.location.href = 'room.html';
+            const roomParams = new URLSearchParams({ room: roomId, player: playerId });
+            window.location.href = `room.html?${roomParams.toString()}`;
         });
         return;
     }
@@ -303,6 +327,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const wolfChatForm = document.getElementById('wolf-chat-form');
     const wolfChatInput = document.getElementById('wolf-chat-input');
     const wolfChatSend = document.getElementById('wolf-chat-send');
+    const dayChatPanel = document.getElementById('day-chat-panel');
+    const dayChatList = document.getElementById('day-chat-messages');
+    const dayChatForm = document.getElementById('day-chat-form');
+    const dayChatInput = document.getElementById('day-chat-input');
+    const dayChatSend = document.getElementById('day-chat-send');
 
     if (!roomId || !playerName) {
         if (messageBox) {
@@ -322,18 +351,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     const roomRef = ref(db, `rooms/${roomId}`);
     const playerRef = ref(db, `rooms/${roomId}/players/${currentPlayerId}`);
     const wolfChatRef = ref(db, `wolfChats/${roomId}`);
+    const dayChatRef = ref(db, `dayChats/${roomId}`);
     let stopWolfChatListener = null;
+    let stopDayChatListener = null;
     let canUseWolfChat = false;
+    let canUseDayChat = false;
+    let currentDeadline = 0;
     roomHeading.textContent = playerName;
 
-    const renderWolfChat = (snapshot) => {
+    const renderChatMessages = (snapshot, list, emptyText) => {
         const messages = Object.entries(snapshot.val() || {});
-        wolfChatList.replaceChildren();
+        list.replaceChildren();
         if (!messages.length) {
             const emptyMessage = document.createElement('li');
             emptyMessage.className = 'empty-row';
-            emptyMessage.textContent = '尚無訊息，和狼人同伴討論戰術。';
-            wolfChatList.appendChild(emptyMessage);
+            emptyMessage.textContent = emptyText;
+            list.appendChild(emptyMessage);
             return;
         }
 
@@ -352,39 +385,89 @@ document.addEventListener('DOMContentLoaded', async () => {
             text.textContent = message.text || '';
             header.append(name, time);
             item.append(header, text);
-            wolfChatList.appendChild(item);
+            list.appendChild(item);
         });
-        wolfChatList.scrollTop = wolfChatList.scrollHeight;
+        list.scrollTop = list.scrollHeight;
     };
 
-    wolfChatForm.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const text = wolfChatInput.value.trim();
-        if (!canUseWolfChat || !text) return;
+    const bindChatForm = (form, input, button, chatRef, canSend, channelName) => {
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const text = input.value.trim();
+            if (!canSend() || !text) return;
 
-        wolfChatSend.disabled = true;
-        try {
-            await set(push(wolfChatRef), {
-                playerId: currentPlayerId,
-                name: playerName,
-                text: text.slice(0, 300),
-                createdAt: Date.now()
+            button.disabled = true;
+            try {
+                await set(push(chatRef), {
+                    playerId: currentPlayerId,
+                    name: playerName,
+                    text: text.slice(0, 300),
+                    createdAt: Date.now()
+                });
+                input.value = '';
+            } catch (error) {
+                console.error(`Failed to send ${channelName} message:`, error);
+                messageBox.textContent = `${channelName}訊息傳送失敗，請確認 Firebase 權限。`;
+            } finally {
+                button.disabled = !canSend() || !input.value.trim();
+            }
+        });
+        input.addEventListener('input', () => {
+            button.disabled = !canSend() || !input.value.trim();
+        });
+    };
+
+    bindChatForm(wolfChatForm, wolfChatInput, wolfChatSend, wolfChatRef, () => canUseWolfChat, '狼人頻道');
+    bindChatForm(dayChatForm, dayChatInput, dayChatSend, dayChatRef, () => canUseDayChat, '白天對話');
+
+    const setChatAccess = (wolfAccess, dayAccess) => {
+        canUseWolfChat = wolfAccess;
+        canUseDayChat = dayAccess;
+        wolfChatPanel.hidden = !wolfAccess;
+        wolfChatInput.disabled = !wolfAccess;
+        wolfChatSend.disabled = !wolfAccess || !wolfChatInput.value.trim();
+        dayChatPanel.hidden = !dayAccess;
+        dayChatInput.disabled = !dayAccess;
+        dayChatSend.disabled = !dayAccess || !dayChatInput.value.trim();
+
+        if (wolfAccess && !stopWolfChatListener) {
+            stopWolfChatListener = onValue(query(wolfChatRef, orderByKey(), limitToLast(50)), (snapshot) => {
+                renderChatMessages(snapshot, wolfChatList, '尚無訊息，和狼人同伴討論戰術。');
             });
-            wolfChatInput.value = '';
-        } catch (error) {
-            console.error('Failed to send wolf chat message:', error);
-            messageBox.textContent = '狼人頻道訊息傳送失敗，請確認 Firebase 權限。';
-        } finally {
-            wolfChatSend.disabled = !canUseWolfChat || !wolfChatInput.value.trim();
+        } else if (!wolfAccess && stopWolfChatListener) {
+            stopWolfChatListener();
+            stopWolfChatListener = null;
+            wolfChatList.replaceChildren();
         }
-    });
-    wolfChatInput.addEventListener('input', () => {
-        wolfChatSend.disabled = !canUseWolfChat || !wolfChatInput.value.trim();
-    });
+
+        if (dayAccess && !stopDayChatListener) {
+            stopDayChatListener = onValue(query(dayChatRef, orderByKey(), limitToLast(50)), (snapshot) => {
+                renderChatMessages(snapshot, dayChatList, '尚無訊息，開始白天討論吧。');
+            });
+        } else if (!dayAccess && stopDayChatListener) {
+            stopDayChatListener();
+            stopDayChatListener = null;
+            dayChatList.replaceChildren();
+        }
+    };
+
+    const refreshPlayerTimer = () => {
+        if (!currentDeadline) {
+            playerTimer.textContent = '--:--';
+            return;
+        }
+        const seconds = Math.max(0, Math.ceil((currentDeadline - Date.now()) / 1000));
+        playerTimer.textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+    };
+    setInterval(refreshPlayerTimer, 1000);
+    document.addEventListener('visibilitychange', refreshPlayerTimer);
 
     onValue(roomRef, async (snapshot) => {
         const room = snapshot.val();
         if (!room) {
+            currentDeadline = 0;
+            refreshPlayerTimer();
+            setChatAccess(false, false);
             wolfChatPanel.hidden = true;
             stopWolfChatListener?.();
             stopWolfChatListener = null;
@@ -392,19 +475,22 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
+        currentDeadline = Number(room.phaseEndsAt || 0);
+        refreshPlayerTimer();
         const currentPlayer = room.players?.[currentPlayerId];
         const privateRole = room.privateRoles?.[currentPlayerId];
-        canUseWolfChat = room.status === 'PLAYING' && privateRole === 'WEREWOLF' && currentPlayer?.isAlive !== false;
-        wolfChatPanel.hidden = !canUseWolfChat;
-        wolfChatInput.disabled = !canUseWolfChat;
-        wolfChatSend.disabled = !canUseWolfChat || !wolfChatInput.value.trim();
-        if (canUseWolfChat && !stopWolfChatListener) {
-            stopWolfChatListener = onValue(query(wolfChatRef, orderByKey(), limitToLast(50)), renderWolfChat);
-        } else if (!canUseWolfChat && stopWolfChatListener) {
-            stopWolfChatListener();
-            stopWolfChatListener = null;
-            wolfChatList.replaceChildren();
+        if (room.kickedPlayers?.[currentPlayerId]) {
+            setChatAccess(false, false);
+            readyButton.disabled = true;
+            revealButton.hidden = true;
+            document.getElementById('action-content').replaceChildren();
+            messageBox.textContent = '你已被房主移出房間。';
+            return;
         }
+        const activePlayer = Boolean(currentPlayer) && currentPlayer.isAlive !== false && !currentPlayer.kicked;
+        const canUseWolfChannel = room.status === 'PLAYING' && privateRole === 'WEREWOLF' && activePlayer;
+        const canUsePublicChat = room.status === 'PLAYING' && room.phase === 'DAY_DISCUSSION' && activePlayer;
+        setChatAccess(canUseWolfChannel, canUsePublicChat);
 
         if (room.status === 'ENDED') {
             const winnerText = room.lastEvent || '遊戲結束。';
@@ -455,16 +541,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         renderPlayerList(room.players || {}, currentPlayerId);
         showPlayerActions(room, currentPlayerId, currentPlayer, privateRole || 'VILLAGER');
-
-        const deadline = Number(room.phaseEndsAt || 0);
-        if (deadline) {
-            const seconds = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-            const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
-            const ss = String(seconds % 60).padStart(2, '0');
-            playerTimer.textContent = `${mm}:${ss}`;
-        } else {
-            playerTimer.textContent = '--:--';
-        }
 
         messageBox.textContent = room.lastEvent || '等待房主開始遊戲。';
     });
