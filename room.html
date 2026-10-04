@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<meta name="theme-color" content="#121212">
+	<title>狼人殺 - 玩家手把</title>
+	<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="dark-theme game-layout player-layout">
+	<main class="app-shell player-shell" id="player-app">
+		<header class="page-header player-header">
+			<div>
+				<p class="eyebrow">玩家手把</p>
+				<h1 id="player-heading">連線中</h1>
+			</div>
+			<span class="status-pill" id="player-phase">等待房間</span>
+		</header>
+
+		<p class="connection-note" id="player-message" role="status" aria-live="polite">正在連線至房間…</p>
+
+		<section class="panel player-panel" id="waiting-panel">
+			<div class="panel-heading">
+				<div>
+					<p class="eyebrow">等待區</p>
+					<h2>座位 <span id="player-seat">--</span></h2>
+				</div>
+				<button class="btn btn-primary btn-compact" id="ready-button" type="button" disabled>準備</button>
+			</div>
+			<ul class="compact-player-list" id="room-player-list"></ul>
+		</section>
+
+		<section class="panel role-panel">
+			<div class="panel-heading">
+				<div>
+					<p class="eyebrow">你的身份</p>
+					<h2 id="role-title">尚未發牌</h2>
+				</div>
+				<button class="btn btn-compact" id="reveal-role" type="button" hidden>查看底牌</button>
+			</div>
+			<p class="role-description" id="role-description">房主開始遊戲後，身份會出現在這裡。</p>
+		</section>
+
+		<section class="panel wolf-chat-panel" id="wolf-chat-panel" aria-labelledby="wolf-chat-title" hidden>
+			<div class="panel-heading">
+				<div>
+					<p class="eyebrow">陣營頻道</p>
+					<h2 id="wolf-chat-title">狼人密語</h2>
+				</div>
+				<span class="status-pill">狼人專屬</span>
+			</div>
+			<ol class="wolf-chat-messages" id="wolf-chat-messages" aria-live="polite" aria-relevant="additions"></ol>
+			<form class="wolf-chat-form" id="wolf-chat-form">
+				<input id="wolf-chat-input" type="text" maxlength="300" autocomplete="off" placeholder="傳送訊息給狼人同伴" aria-label="狼人頻道訊息" disabled>
+				<button class="btn btn-primary btn-compact" id="wolf-chat-send" type="submit" disabled>送出</button>
+			</form>
+		</section>
+
+		<section class="panel action-panel">
+			<div class="panel-heading">
+				<div>
+					<p class="eyebrow">目前行動</p>
+					<h2 id="action-title">等待遊戲開始</h2>
+				</div>
+				<strong class="phase-timer small-timer" id="player-timer">--:--</strong>
+			</div>
+			<div id="action-content" class="action-content"></div>
+		</section>
+	</main>
+	<script type="module" src="js/player.js"></script>
+</body>
+</html>

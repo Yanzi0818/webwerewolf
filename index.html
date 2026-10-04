@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>狼人殺 - Join game</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body class = dark-theme>
+    <div class = "container">
+        <div class = card>
+            <div class = "card-header primary-header">
+                <h2>狼人殺 Web version</h2>
+            </div>
+
+            <div class = "card-body">
+                <form id = "join-form">
+                    <div class = "form-group">
+                        <label for = "player-name">玩家暱稱</label>
+                        <input 
+                            type = "text"
+                            id = "player-name"
+                            name = "player-name"
+                            placeholder = "請輸入玩家暱稱" 
+                            maxlength = "10"
+                            required
+                            autocomplete = "off"
+                        >
+                    </div>
+
+                    <div class = "form-group">
+                        <label for = "room-id">房間號碼</label>
+                        <input 
+                            type = "text"
+                            id = "room-id"
+                            name = "room-id"
+                            placeholder = "請輸入 4位數 房間號碼"
+                            maxlength = "4"
+                            pattern = "[0-9]{4}"
+                            inputmode = "numeric"
+                            required
+                            autocomplete = "off">
+                    </div>
+
+                    <button type = "submit" id = "btn-join-game" class = "btn btn-primary">加入遊戲</button>
+                </form>
+
+                <div class = "host-link-contaner">
+                    <p>你是房主嗎？<a href="setting.html">點此建立房間</a></p>
+                </div>
+            </div>
+        </div>
+
+    </div>
+    <script type = "module" src = "js/player.js"></script>
+</body>
+</html>

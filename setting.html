@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>狼人殺 - 建立房間</title>
+	<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="dark-theme">
+	<main class="container">
+		<section class="card">
+			<header class="card-header primary-header">
+				<h1>建立狼人殺房間</h1>
+			</header>
+			<div class="card-body">
+				<form id="create-room-form">
+					<div class="form-group">
+						<label for="preset">遊戲板子</label>
+						<select id="preset" name="preset" required>
+							<option value="9_STANDARD">9 人標準局</option>
+							<option value="6_STANDARD">6 人入門局</option>
+						</select>
+					</div>
+					<div class="form-group">
+						<label for="player-count">玩家人數</label>
+						<input id="player-count" name="player-count" type="number" min="4" max="12" value="9" required>
+					</div>
+					<div class="form-group">
+						<label for="speech-time">每人發言時間（秒）</label>
+						<input id="speech-time" name="speech-time" type="number" min="15" max="300" value="60" required>
+					</div>
+					<div class="form-group">
+						<label for="room-id">四位數房間號碼</label>
+						<input id="room-id" name="room-id" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required>
+					</div>
+					<button class="btn" id="generate-room-id" type="button">重新產生房號</button>
+					<button class="btn btn-primary" id="create-room" type="submit">建立房間</button>
+					<p id="form-message" role="status" aria-live="polite"></p>
+				</form>
+			</div>
+		</section>
+	</main>
+	<script type="module" src="js/host.js"></script>
+</body>
+</html>

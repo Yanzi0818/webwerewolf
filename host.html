@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>狼人殺 - 房主看板</title>
+	<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="dark-theme game-layout">
+	<main class="app-shell host-shell" id="host-dashboard">
+		<header class="page-header">
+			<div>
+				<p class="eyebrow">房主看板</p>
+				<h1>狼人殺</h1>
+			</div>
+			<div class="room-code-block">
+				<span>房間號碼</span>
+				<strong id="room-code">----</strong>
+				<button class="btn btn-compact" id="copy-room-code" type="button" title="複製房號">複製</button>
+			</div>
+		</header>
+
+		<section class="phase-banner" aria-live="polite">
+			<div>
+				<p class="eyebrow" id="game-status">連線中</p>
+				<h2 id="phase-title">等待房間資料</h2>
+			</div>
+			<strong class="phase-timer" id="phase-timer">--:--</strong>
+		</section>
+
+		<div class="host-grid">
+			<section class="panel">
+				<div class="panel-heading">
+					<div>
+						<p class="eyebrow">座位狀態</p>
+						<h2>玩家 <span id="player-count-label">0 / 0</span></h2>
+					</div>
+					<span class="status-pill" id="ready-count">0 人準備</span>
+				</div>
+				<ol class="player-list" id="player-list"></ol>
+				<p class="empty-state" id="empty-players">等待玩家加入房間。</p>
+			</section>
+
+			<aside class="panel host-controls">
+				<p class="eyebrow">主持控制</p>
+				<h2>遊戲流程</h2>
+				<p class="panel-copy" id="host-message">請分享房號，等候玩家加入並準備。</p>
+				<button class="btn btn-primary" id="start-game" type="button" disabled>開始遊戲並發牌</button>
+				<button class="btn" id="advance-phase" type="button" disabled>進入下一階段</button>
+				<button class="btn btn-primary" id="restart-game" type="button" hidden>重新開局</button>
+				<button class="btn btn-danger" id="clear-room" type="button">清空房間</button>
+				<div class="event-log" aria-live="polite">
+					<span>最新結果</span>
+					<p id="last-event">尚無遊戲結果。</p>
+				</div>
+			</aside>
+		</div>
+
+		<section class="panel role-settings" aria-labelledby="role-settings-title">
+			<div class="panel-heading">
+				<div>
+					<p class="eyebrow">房間設定</p>
+					<h2 id="role-settings-title">角色配置</h2>
+				</div>
+				<span class="status-pill" id="role-config-state">載入中</span>
+			</div>
+			<fieldset class="role-configuration" id="role-configuration">
+				<legend>選擇本局角色</legend>
+				<div class="role-categories">
+					<section class="role-category" aria-labelledby="good-role-title">
+						<h3 id="good-role-title">好人</h3>
+						<div class="good-role-groups">
+							<section class="good-role-group" aria-labelledby="civilian-role-title">
+								<h4 id="civilian-role-title">平民職業</h4>
+								<div class="role-quantity">
+									<label for="villager-count">村民數量</label>
+									<input id="villager-count" data-role-quantity="VILLAGER" type="number" min="0" max="12" value="1" required>
+								</div>
+							</section>
+							<section class="good-role-group" aria-labelledby="god-role-title">
+								<h4 id="god-role-title">神職職業</h4>
+								<div class="role-toggle-grid">
+									<label class="role-toggle" for="seer-role"><input id="seer-role" data-role-toggle="SEER" type="checkbox"><span>預言家</span></label>
+									<label class="role-toggle" for="witch-role"><input id="witch-role" data-role-toggle="WITCH" type="checkbox"><span>女巫</span></label>
+									<label class="role-toggle" for="hunter-role"><input id="hunter-role" data-role-toggle="HUNTER" type="checkbox"><span>獵人</span></label>
+									<label class="role-toggle" for="idiot-role"><input id="idiot-role" data-role-toggle="IDIOT" type="checkbox"><span>白癡</span></label>
+								</div>
+							</section>
+						</div>
+					</section>
+					<section class="role-category" aria-labelledby="wolf-role-title">
+						<h3 id="wolf-role-title">狼人</h3>
+						<div class="role-category-controls">
+							<div class="role-quantity">
+								<label for="werewolf-count">狼人數量</label>
+								<input id="werewolf-count" data-role-quantity="WEREWOLF" type="number" min="1" max="12" value="1" required>
+							</div>
+						</div>
+					</section>
+					<section class="role-category" aria-labelledby="third-party-role-title">
+						<h3 id="third-party-role-title">第三方</h3>
+						<p class="role-category-empty">目前尚未加入第三方角色</p>
+					</section>
+					<section class="role-category" aria-labelledby="extra-role-title">
+						<h3 id="extra-role-title">附加職業</h3>
+						<p class="role-category-empty">目前尚無附加職業</p>
+					</section>
+				</div>
+				<p class="role-count-status" id="role-count-status" role="status" aria-live="polite"></p>
+			</fieldset>
+			<div class="role-config-footer">
+				<p class="panel-copy" id="role-config-message">角色配置會套用於下一局。</p>
+				<button class="btn btn-primary" id="save-role-config" type="button" disabled>儲存角色配置</button>
+			</div>
+			<details class="role-skill-reference">
+				<summary>檢視角色技能</summary>
+				<div class="role-skill-list" id="role-skill-list"></div>
+			</details>
+		</section>
+		<p class="connection-note" id="connection-note" role="status" aria-live="polite"></p>
+	</main>
+	<script type="module" src="js/host.js"></script>
+</body>
+</html>
