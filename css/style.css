@@ -259,6 +259,64 @@ body.dark-theme {
     font-weight: 700;
 }
 
+.phase-time-settings {
+    padding: 18px;
+}
+
+.phase-time-fields {
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.phase-time-fields legend {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+}
+
+.phase-duration-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.phase-duration-field {
+    min-width: 0;
+}
+
+.phase-duration-field label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
+.phase-duration-field div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+}
+
+.phase-duration-field input {
+    width: 100%;
+    min-width: 0;
+    padding: 10px 12px;
+    background: #2c2c2c;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-color);
+}
+
+.phase-duration-field span {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
 .role-settings .role-configuration legend {
     position: absolute;
     width: 1px;
@@ -684,6 +742,10 @@ body.dark-theme {
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 
+	.phase-duration-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
     .page-header,
     .phase-banner {
         align-items: flex-start;
@@ -706,4 +768,8 @@ body.dark-theme {
 	.role-skill-list {
 		grid-template-columns: 1fr;
 	}
+
+    .phase-duration-grid {
+        grid-template-columns: 1fr;
+    }
 }

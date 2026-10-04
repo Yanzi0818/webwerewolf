@@ -117,6 +117,53 @@
 				<div class="role-skill-list" id="role-skill-list"></div>
 			</details>
 		</section>
+
+		<section class="panel phase-time-settings" aria-labelledby="phase-time-title">
+			<div class="panel-heading">
+				<div>
+					<p class="eyebrow">房間設定</p>
+					<h2 id="phase-time-title">階段時間</h2>
+				</div>
+				<span class="status-pill" id="phase-time-state">載入中</span>
+			</div>
+			<fieldset class="phase-time-fields" id="phase-time-fields">
+				<legend>每個階段的時間長度</legend>
+				<div class="phase-duration-grid">
+					<div class="phase-duration-field">
+						<label for="duration-wolves">狼人行動</label>
+						<div><input id="duration-wolves" data-phase-duration="NIGHT_WOLVES" type="number" min="5" max="600" step="1"><span>秒</span></div>
+					</div>
+					<div class="phase-duration-field">
+						<label for="duration-gods">神職行動</label>
+						<div><input id="duration-gods" data-phase-duration="NIGHT_GODS" type="number" min="5" max="600" step="1"><span>秒</span></div>
+					</div>
+					<div class="phase-duration-field">
+						<label for="duration-hunter">獵人開槍</label>
+						<div><input id="duration-hunter" data-phase-duration="HUNTER_SHOT" type="number" min="5" max="600" step="1"><span>秒</span></div>
+					</div>
+					<div class="phase-duration-field">
+						<label for="duration-discussion">自由討論</label>
+						<div><input id="duration-discussion" data-phase-duration="DAY_DISCUSSION" type="number" min="5" max="600" step="1"><span>秒</span></div>
+					</div>
+					<div class="phase-duration-field">
+						<label for="duration-voting">投票放逐</label>
+						<div><input id="duration-voting" data-phase-duration="DAY_VOTING" type="number" min="5" max="600" step="1"><span>秒</span></div>
+					</div>
+					<div class="phase-duration-field">
+						<label for="duration-result">公布結果</label>
+						<div><input id="duration-result" data-phase-duration="DAY_RESULT" type="number" min="5" max="600" step="1"><span>秒</span></div>
+					</div>
+					<div class="phase-duration-field">
+						<label for="duration-last-words">每人遺言</label>
+						<div><input id="duration-last-words" data-phase-duration="LAST_WORDS" type="number" min="5" max="600" step="1"><span>秒</span></div>
+					</div>
+				</div>
+			</fieldset>
+			<div class="role-config-footer">
+				<p class="panel-copy" id="phase-time-message">開始遊戲前可調整每個階段的倒數時間。</p>
+				<button class="btn btn-primary" id="save-phase-times" type="button" disabled>儲存階段時間</button>
+			</div>
+		</section>
 		<p class="connection-note" id="connection-note" role="status" aria-live="polite"></p>
 	</main>
 	<script type="module" src="js/host.js"></script>

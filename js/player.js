@@ -11,6 +11,7 @@ const PHASE_LABELS = {
     DAY_DISCUSSION: '白天・討論中',
     DAY_VOTING: '白天・投票中',
     DAY_RESULT: '白天・結果公布',
+    LAST_WORDS: '出局・遺言時間',
     GAME_OVER: '遊戲結束'
 };
 
@@ -85,6 +86,19 @@ function showPlayerActions(room, playerId, playerData, roleKey) {
 
     if (room?.status !== 'PLAYING') {
         actionContent.innerHTML = '<p class="empty-row">房主尚未開始遊戲。</p>';
+        return;
+    }
+
+    if (phase === 'LAST_WORDS') {
+        const speaker = room.players?.[room.lastWordsPlayerId];
+        const message = room.lastWordsPlayerId === playerId
+            ? '現在是你的遺言時間，請在時間內完成發言。'
+            : `現在是 ${speaker?.name || '出局玩家'}（座位 ${speaker?.seat || '--'}）的遺言時間。`;
+        actionContent.innerHTML = '';
+        const note = document.createElement('p');
+        note.className = 'empty-row last-words-notice';
+        note.textContent = message;
+        actionContent.appendChild(note);
         return;
     }
 

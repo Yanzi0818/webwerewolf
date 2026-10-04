@@ -8,10 +8,10 @@ const PHASE_LABELS = {
 	NIGHT_WOLVES: '夜晚・狼人行動',
 	NIGHT_GODS: '夜晚・神職行動',
 	HUNTER_SHOT: '獵人・最後一槍',
-	HUNTER_SHOT: '獵人・最後一槍',
 	DAY_DISCUSSION: '白天・自由討論',
 	DAY_VOTING: '白天・投票放逐',
 	DAY_RESULT: '白天・公布結果',
+	LAST_WORDS: '出局・遺言時間',
 	GAME_OVER: '遊戲結束'
 };
 
@@ -19,10 +19,10 @@ const PHASE_DURATIONS = {
 	NIGHT_WOLVES: 45,
 	NIGHT_GODS: 45,
 	HUNTER_SHOT: 25,
-	HUNTER_SHOT: 25,
 	DAY_DISCUSSION: 60,
 	DAY_VOTING: 30,
-	DAY_RESULT: 12
+	DAY_RESULT: 12,
+	LAST_WORDS: 30
 };
 
 function renderRoleSkillReference() {
@@ -181,6 +181,79 @@ function createRoleConfigurationController(onSaved, onChange) {
 	};
 }
 
+function getPhaseDuration(room, phase) {
+	const configuredDuration = Number(room.settings?.phaseDurations?.[phase]);
+	if (Number.isInteger(configuredDuration) && configuredDuration >= 5 && configuredDuration <= 600) {
+		return configuredDuration;
+	}
+	return PHASE_DURATIONS[phase] || 0;
+}
+
+function createPhaseTimeController(onSaved) {
+	const fieldset = document.getElementById('phase-time-fields');
+	const inputs = [...document.querySelectorAll('[data-phase-duration]')];
+	const state = document.getElementById('phase-time-state');
+	const message = document.getElementById('phase-time-message');
+	const saveButton = document.getElementById('save-phase-times');
+	const phaseKeys = Object.keys(PHASE_DURATIONS);
+	let savedSignature = '';
+	let loadedSignature = '';
+	let editable = false;
+	let saving = false;
+
+	const getValues = () => Object.fromEntries(inputs.map((input) => [input.dataset.phaseDuration, Number(input.value)]));
+	const getSignature = (values) => phaseKeys.map((phase) => values[phase]).join(':');
+	const isValid = (values) => phaseKeys.every((phase) => Number.isInteger(values[phase]) && values[phase] >= 5 && values[phase] <= 600);
+	const updateState = () => {
+		const values = getValues();
+		const dirty = getSignature(values) !== savedSignature;
+		state.textContent = saving ? '儲存中' : dirty ? '尚未儲存' : '已儲存';
+		message.textContent = editable ? '開始遊戲前可調整每個階段的倒數時間。' : '遊戲進行中或已結束時無法修改階段時間。';
+		saveButton.disabled = !editable || saving || !isValid(values) || !dirty;
+	};
+
+	fieldset.disabled = true;
+	for (const input of inputs) {
+		input.addEventListener('input', updateState);
+		input.addEventListener('change', updateState);
+	}
+	saveButton.addEventListener('click', async () => {
+		const values = getValues();
+		if (!editable || !isValid(values)) return;
+		saving = true;
+		updateState();
+		try {
+			const saved = await onSaved(values);
+			if (saved) savedSignature = getSignature(values);
+			else message.textContent = '儲存失敗，請確認房間仍在等待狀態後重試。';
+		} catch (error) {
+			console.error('Failed to save phase durations:', error);
+			message.textContent = '儲存失敗，請確認 Firebase 連線後重試。';
+		} finally {
+			saving = false;
+			updateState();
+		}
+	});
+
+	return {
+		load(durations, canEdit) {
+			const normalized = Object.fromEntries(phaseKeys.map((phase) => {
+				const value = Number(durations?.[phase] ?? PHASE_DURATIONS[phase]);
+				return [phase, Number.isInteger(value) && value >= 5 && value <= 600 ? value : PHASE_DURATIONS[phase]];
+			}));
+			const signature = getSignature(normalized);
+			if (signature !== loadedSignature) {
+				for (const input of inputs) input.value = String(normalized[input.dataset.phaseDuration]);
+				savedSignature = signature;
+				loadedSignature = signature;
+			}
+			editable = Boolean(canEdit);
+			fieldset.disabled = !editable;
+			updateState();
+		}
+	};
+}
+
 function generateRoomId() {
 	return String(Math.floor(1000 + Math.random() * 9000));
 }
@@ -233,10 +306,12 @@ function resolveNight(room) {
 	if (poisonTargetSeat) deaths.add(poisonTargetSeat);
 
 	const deadNames = [];
+	const deadPlayerIds = [];
 	for (const [playerId, player] of Object.entries(players)) {
 		if (player.isAlive !== false && deaths.has(Number(player.seat))) {
 			players[playerId] = { ...player, isAlive: false };
 			deadNames.push(player.name);
+			deadPlayerIds.push(playerId);
 		}
 	}
 
@@ -265,6 +340,7 @@ function resolveNight(room) {
 		players,
 		witchPotions: potions,
 		hunterPlayerId,
+		deadPlayerIds,
 		message: `${seerSummary} ${summaries.join(' ')}`.trim()
 	};
 }
@@ -282,12 +358,12 @@ function resolveVote(room) {
 	const highestVotes = Math.max(0, ...counts.values());
 	const leaders = [...counts.entries()].filter(([, votes]) => votes === highestVotes);
 	if (highestVotes === 0 || leaders.length !== 1) {
-		return { players, message: '平票或無有效票數，今日無人出局。' };
+		return { players, deadPlayerIds: [], hunterPlayerId: null, message: '平票或無有效票數，今日無人出局。' };
 	}
 
 	const targetSeat = leaders[0][0];
 	const target = Object.entries(players).find(([, player]) => player.isAlive !== false && Number(player.seat) === targetSeat);
-	if (!target) return { players, message: '今日無人出局。' };
+	if (!target) return { players, deadPlayerIds: [], hunterPlayerId: null, message: '今日無人出局。' };
 	const targetPlayerId = target[0];
 	const targetRole = room.privateRoles?.[targetPlayerId];
 	if (targetRole === 'IDIOT' && !players[targetPlayerId].idiotSaved) {
@@ -297,13 +373,30 @@ function resolveVote(room) {
 			idiotSaved: true,
 			canVote: false
 		};
-		return { players, hunterPlayerId: null, message: `投票放逐：${target[1].name}（${highestVotes} 票），白癡翻牌免死，失去投票權。` };
+		return { players, deadPlayerIds: [], hunterPlayerId: null, message: `投票放逐：${target[1].name}（${highestVotes} 票），白癡翻牌免死，失去投票權。` };
 	}
 	players[target[0]] = { ...target[1], isAlive: false };
 	return {
 		players,
+		deadPlayerIds: [targetPlayerId],
 		hunterPlayerId: targetRole === 'HUNTER' ? targetPlayerId : null,
 		message: `投票放逐：${target[1].name}（${highestVotes} 票）`
+	};
+}
+
+function queueLastWords(room, playerIds, nextPhase) {
+	const queue = [...new Set(playerIds || [])].filter((playerId) => room.players?.[playerId]?.isAlive === false);
+	if (!queue.length) return { ...room, phase: nextPhase };
+
+	const firstSpeaker = room.players[queue[0]];
+	return {
+		...room,
+		phase: 'LAST_WORDS',
+		lastWordsQueue: queue,
+		lastWordsIndex: 0,
+		lastWordsPlayerId: queue[0],
+		nextPhaseAfterLastWords: nextPhase,
+		lastEvent: `${firstSpeaker.name}（座位 ${firstSpeaker.seat}）正在遺言。`
 	};
 }
 
@@ -348,13 +441,18 @@ async function startGame(roomRef, room) {
 			...currentRoom,
 			status: 'PLAYING',
 			phase: 'NIGHT_WOLVES',
-			phaseEndsAt: Date.now() + PHASE_DURATIONS.NIGHT_WOLVES * 1000,
+			phaseEndsAt: Date.now() + getPhaseDuration(currentRoom, 'NIGHT_WOLVES') * 1000,
 			players,
 			privateRoles,
 			nightActions: { wolfKillTarget: null, witchSave: false, witchPoisonTarget: null, seerCheckTarget: null, hunterShotTarget: null },
 			witchPotions: { antidoteUsed: false, poisonUsed: false },
 			pendingHunterId: null,
 			phaseAfterHunterShot: null,
+			pendingLastWordsQueue: null,
+			lastWordsQueue: null,
+			lastWordsIndex: null,
+			lastWordsPlayerId: null,
+			nextPhaseAfterLastWords: null,
 			votes: {},
 			lastEvent: '遊戲開始，請所有玩家確認底牌。'
 		};
@@ -366,7 +464,7 @@ async function restartGame(roomRef) {
 	const result = await runTransaction(roomRef, (room) => {
 		if (!room || room.status !== 'ENDED') return;
 
-		const { privateRoles, votes, nightActions, witchPotions, phaseEndsAt, lastEvent, pendingHunterId, phaseAfterHunterShot, ...waitingRoom } = room;
+		const { privateRoles, votes, nightActions, witchPotions, phaseEndsAt, lastEvent, pendingHunterId, phaseAfterHunterShot, lastWordsQueue, lastWordsIndex, lastWordsPlayerId, nextPhaseAfterLastWords, ...waitingRoom } = room;
 		const players = Object.fromEntries(Object.entries(room.players || {}).map(([playerId, player]) => [
 			playerId,
 			{ ...player, isAlive: true, isReady: false, idiotSaved: false, canVote: true, hunterCanShoot: false }
@@ -381,6 +479,11 @@ async function restartGame(roomRef) {
 			witchPotions: { antidoteUsed: false, poisonUsed: false },
 			pendingHunterId: null,
 			phaseAfterHunterShot: null,
+			pendingLastWordsQueue: null,
+			lastWordsQueue: null,
+			lastWordsIndex: null,
+			lastWordsPlayerId: null,
+			nextPhaseAfterLastWords: null,
 			votes: {},
 			lastEvent: '上一局已結束，請所有玩家重新準備。'
 		};
@@ -406,9 +509,11 @@ async function advancePhase(roomRef) {
 			if (resolution.hunterPlayerId) {
 				nextRoom.pendingHunterId = resolution.hunterPlayerId;
 				nextRoom.phaseAfterHunterShot = 'DAY_DISCUSSION';
+				nextRoom.pendingLastWordsQueue = resolution.deadPlayerIds;
 				nextPhase = 'HUNTER_SHOT';
 			} else {
-				nextPhase = 'DAY_DISCUSSION';
+				nextRoom = queueLastWords(nextRoom, resolution.deadPlayerIds, 'DAY_DISCUSSION');
+				nextPhase = nextRoom.phase;
 			}
 		} else if (room.phase === 'DAY_DISCUSSION') {
 			nextPhase = 'DAY_VOTING';
@@ -419,25 +524,46 @@ async function advancePhase(roomRef) {
 			if (resolution.hunterPlayerId) {
 				nextRoom.pendingHunterId = resolution.hunterPlayerId;
 				nextRoom.phaseAfterHunterShot = 'DAY_RESULT';
+				nextRoom.pendingLastWordsQueue = resolution.deadPlayerIds;
 				nextPhase = 'HUNTER_SHOT';
 			} else {
-				nextPhase = 'DAY_RESULT';
+				nextRoom = queueLastWords(nextRoom, resolution.deadPlayerIds, 'DAY_RESULT');
+				nextPhase = nextRoom.phase;
 			}
 		} else if (room.phase === 'HUNTER_SHOT') {
 			const targetSeat = Number(room.nightActions?.hunterShotTarget || 0);
 			const targetPlayerId = findPlayerIdBySeat(nextRoom.players, targetSeat);
 			const hunterId = room.pendingHunterId;
 			const hunter = hunterId ? nextRoom.players[hunterId] : null;
+			const deadPlayerIds = [...(room.pendingLastWordsQueue || [])];
 			if (targetPlayerId && hunter && room.privateRoles?.[hunterId] === 'HUNTER') {
 				nextRoom.players[targetPlayerId] = { ...nextRoom.players[targetPlayerId], isAlive: false };
+				deadPlayerIds.push(targetPlayerId);
 				nextRoom.lastEvent = `獵人 ${hunter.name} 開槍帶走 ${nextRoom.players[targetPlayerId].name}。`;
 			} else {
 				nextRoom.lastEvent = `獵人 ${hunter?.name || ''} 沒有開槍。`;
 			}
-			const { pendingHunterId, phaseAfterHunterShot, ...roomWithoutPendingHunter } = nextRoom;
+			const afterShotPhase = room.phaseAfterHunterShot || 'DAY_RESULT';
+			const { pendingHunterId, phaseAfterHunterShot, pendingLastWordsQueue, ...roomWithoutPendingHunter } = nextRoom;
 			nextRoom = roomWithoutPendingHunter;
 			nextRoom.nightActions = { ...room.nightActions, hunterShotTarget: null };
-			nextPhase = room.phaseAfterHunterShot || 'DAY_RESULT';
+			nextRoom = queueLastWords(nextRoom, deadPlayerIds, afterShotPhase);
+			nextPhase = nextRoom.phase;
+		} else if (room.phase === 'LAST_WORDS') {
+			const queue = room.lastWordsQueue || [];
+			const nextIndex = Number(room.lastWordsIndex || 0) + 1;
+			if (nextIndex < queue.length) {
+				const nextPlayerId = queue[nextIndex];
+				const speaker = room.players?.[nextPlayerId];
+				nextRoom.lastWordsIndex = nextIndex;
+				nextRoom.lastWordsPlayerId = nextPlayerId;
+				nextRoom.lastEvent = `${speaker?.name || '出局玩家'}（座位 ${speaker?.seat || '--'}）正在遺言。`;
+				nextPhase = 'LAST_WORDS';
+			} else {
+				const { lastWordsQueue, lastWordsIndex, lastWordsPlayerId, nextPhaseAfterLastWords, ...roomWithoutLastWords } = nextRoom;
+				nextRoom = { ...roomWithoutLastWords, lastEvent: '遺言時間結束。' };
+				nextPhase = room.nextPhaseAfterLastWords || 'DAY_RESULT';
+			}
 		} else if (room.phase === 'DAY_RESULT') {
 			nextRoom.nightActions = { wolfKillTarget: null, witchSave: false, witchPoisonTarget: null, seerCheckTarget: null, hunterShotTarget: null };
 			nextRoom.votes = {};
@@ -447,14 +573,16 @@ async function advancePhase(roomRef) {
 			return;
 		}
 
-		const winner = nextPhase === 'HUNTER_SHOT' ? null : hasGameWinner(nextRoom.players, nextRoom.privateRoles);
+		const winner = nextPhase === 'HUNTER_SHOT' || nextPhase === 'LAST_WORDS'
+			? null
+			: hasGameWinner(nextRoom.players, nextRoom.privateRoles);
 		if (winner) {
 			nextPhase = 'GAME_OVER';
 			nextRoom.status = 'ENDED';
 			nextRoom.lastEvent = winner;
 		}
 		nextRoom.phase = nextPhase;
-		nextRoom.phaseEndsAt = Date.now() + (PHASE_DURATIONS[nextPhase] || 0) * 1000;
+		nextRoom.phaseEndsAt = Date.now() + getPhaseDuration(nextRoom, nextPhase) * 1000;
 		return nextRoom;
 	});
 	return result.committed;
@@ -508,6 +636,14 @@ function initHostDashboard() {
 				|| !roleConfiguration.isReady();
 		}
 	});
+	const phaseTimeConfiguration = createPhaseTimeController(async (phaseDurations) => {
+		const result = await runTransaction(roomRef, (room) => {
+			if (!room || room.status !== 'WAITING') return;
+			if (Object.values(phaseDurations).some((duration) => !Number.isInteger(duration) || duration < 5 || duration > 600)) return;
+			return { ...room, settings: { ...room.settings, phaseDurations } };
+		});
+		return result.committed;
+	});
 	document.getElementById('copy-room-code').addEventListener('click', async () => {
 		try {
 			await navigator.clipboard.writeText(roomId);
@@ -543,13 +679,15 @@ function initHostDashboard() {
 			return;
 		}
 		connectionNote.textContent = '';
-		const players = Object.values(currentRoom.players || {}).sort((first, second) => first.seat - second.seat);
+		const playerEntries = Object.entries(currentRoom.players || {}).sort(([, first], [, second]) => first.seat - second.seat);
+		const players = playerEntries.map(([, player]) => player);
 		const capacity = Number(currentRoom.settings?.playerCount || 0);
 		const readyCount = players.filter((player) => player.isReady).length;
 		const playing = currentRoom.status === 'PLAYING';
 		const phase = currentRoom.phase || 'WAITING';
 		const phaseDeadline = Number(currentRoom.phaseEndsAt || 0);
 		roleConfiguration.load(capacity, currentRoom.settings?.roleCounts, currentRoom.status === 'WAITING');
+		phaseTimeConfiguration.load(currentRoom.settings?.phaseDurations, currentRoom.status === 'WAITING');
 		if (currentDeadline !== phaseDeadline) currentDeadline = phaseDeadline;
 
 		statusElement.textContent = currentRoom.status === 'ENDED' ? '已結束' : playing ? '進行中' : '等待中';
@@ -563,7 +701,7 @@ function initHostDashboard() {
 		startButton.disabled = players.length !== capacity || readyCount !== capacity || !roleConfiguration.isReady();
 		advanceButton.disabled = !playing;
 		advanceButton.hidden = !playing;
-		playerList.replaceChildren(...players.map((player) => {
+		playerList.replaceChildren(...playerEntries.map(([playerId, player]) => {
 			const item = document.createElement('li');
 			const seat = document.createElement('strong');
 			const name = document.createElement('span');
@@ -571,7 +709,9 @@ function initHostDashboard() {
 			seat.textContent = String(player.seat).padStart(2, '0');
 			name.textContent = player.name;
 			state.className = `player-state${player.isAlive === false ? ' is-dead' : ''}`;
-			state.textContent = player.isAlive === false ? '出局' : playing ? '在場' : player.isReady ? '已準備' : '未準備';
+			state.textContent = player.isAlive === false
+				? playerId === currentRoom.lastWordsPlayerId ? '遺言中' : '出局'
+				: playing ? '在場' : player.isReady ? '已準備' : '未準備';
 			item.append(seat, name, state);
 			return item;
 		}));
@@ -638,8 +778,9 @@ document.addEventListener('DOMContentLoaded', () => {
 					phase: 'DAY_WAITING',
 					settings: {
 						preset: document.getElementById('preset').value,
-							playerCount,
-							roleCounts: defaultRoleCounts(playerCount),
+						playerCount,
+						roleCounts: defaultRoleCounts(playerCount),
+						phaseDurations: { ...PHASE_DURATIONS },
 						speechTime: Number(document.getElementById('speech-time').value)
 					},
 					players: {},
