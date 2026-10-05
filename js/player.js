@@ -8,7 +8,7 @@ const PHASE_LABELS = {
     NIGHT_WOLVES: '夜晚・狼人行動',
     NIGHT_GODS: '夜晚・神職行動',
     HUNTER_SHOT: '獵人・最後一槍',
-    DAY_DISCUSSION: '白天・討論中',
+    DAY_DISCUSSION: '白天・輪流發言',
     DAY_VOTING: '白天・投票中',
     DAY_RESULT: '白天・結果公布',
     LAST_WORDS: '出局・遺言時間',
@@ -50,7 +50,7 @@ function nextAvailableSeat(players = {}) {
     return seat;
 }
 
-function renderPlayerList(players = {}, editablePlayerId = '') {
+function renderPlayerList(players = {}, editablePlayerId = '', room = {}) {
     const list = document.getElementById('room-player-list');
     if (!list) return;
 
@@ -67,20 +67,89 @@ function renderPlayerList(players = {}, editablePlayerId = '') {
         item.className = 'player-mini-card';
         if (playerId === editablePlayerId) item.classList.add('is-me');
         if (player.kicked) item.classList.add('is-dead');
-        item.innerHTML = `
-            <span class="seat-label">${player.seat || '--'}</span>
-            <span class="player-name">${player.name || '匿名玩家'}</span>
-            <span class="mini-state ${player.isReady ? 'ready' : ''}">${player.kicked ? '已踢出' : player.isReady ? '準備' : '未準備'}</span>
-        `;
+        const seat = document.createElement('span');
+        const name = document.createElement('span');
+        const state = document.createElement('span');
+        seat.className = 'seat-label';
+        seat.textContent = String(player.seat || '--');
+        name.className = 'player-name';
+        name.textContent = player.name || '匿名玩家';
+        state.className = 'mini-state';
+        if (player.kicked) {
+            state.textContent = '已踢出';
+        } else if (player.isAlive === false) {
+            state.textContent = '已出局';
+            state.classList.add('is-dead');
+        } else if (room.status === 'PLAYING' && room.phase === 'DAY_DISCUSSION' && room.currentSpeakerId === playerId) {
+            state.textContent = '發言中';
+            state.classList.add('is-speaking');
+        } else if (room.status === 'PLAYING' || room.status === 'ENDED') {
+            state.textContent = '存活';
+        } else {
+            state.textContent = player.isReady ? '準備' : '未準備';
+            if (player.isReady) state.classList.add('ready');
+        }
+        item.append(seat, name, state);
         list.appendChild(item);
     });
+}
+
+function appendVoteResults(container, room) {
+    const voteEntries = Object.entries(room.votes || {});
+    if (!voteEntries.length) return;
+
+    const section = document.createElement('section');
+    section.className = 'vote-results';
+    const heading = document.createElement('h3');
+    heading.textContent = '本輪投票結果';
+    const tally = new Map();
+    voteEntries.forEach(([, targetSeat]) => {
+        const seat = Number(targetSeat);
+        if (seat > 0) tally.set(seat, (tally.get(seat) || 0) + 1);
+    });
+    const list = document.createElement('ul');
+    list.className = 'vote-result-list';
+
+    if (room.settings?.anonymousVoting) {
+        [...tally.entries()].sort(([first], [second]) => first - second).forEach(([seat, count]) => {
+            const target = Object.values(room.players || {}).find((player) => Number(player.seat) === seat);
+            const item = document.createElement('li');
+            item.textContent = `${target?.name || '未知玩家'}（座位 ${seat}）：${count} 票`;
+            list.appendChild(item);
+        });
+        const note = document.createElement('p');
+        note.className = 'panel-copy';
+        note.textContent = '本局為匿名投票，僅顯示各玩家票數。';
+        section.append(heading, list, note);
+    } else {
+        const totals = document.createElement('li');
+        totals.className = 'vote-result-total';
+        totals.textContent = [...tally.entries()]
+            .sort(([first], [second]) => first - second)
+            .map(([seat, count]) => {
+                const target = Object.values(room.players || {}).find((player) => Number(player.seat) === seat);
+                return `${target?.name || '未知玩家'} ${count} 票`;
+            }).join('、') || '沒有有效票數。';
+        list.appendChild(totals);
+        voteEntries.forEach(([voterId, targetSeat]) => {
+            const voter = room.players?.[voterId];
+            const target = Object.values(room.players || {}).find((player) => Number(player.seat) === Number(targetSeat));
+            if (!voter || !target) return;
+            const item = document.createElement('li');
+            item.textContent = `${voter.name} → ${target.name}`;
+            list.appendChild(item);
+        });
+        section.append(heading, list);
+    }
+    container.appendChild(section);
 }
 
 function showPlayerActions(room, playerId, playerData, roleKey) {
     const actionContent = document.getElementById('action-content');
     const actionTitle = document.getElementById('action-title');
     const phase = room?.phase || 'WAITING';
-    const alivePlayers = Object.values(room?.players || {}).filter((player) => player.isAlive !== false && player.seat !== playerData.seat);
+    const alivePlayers = Object.values(room?.players || {}).filter((player) => player.isAlive !== false && Number(player.seat) !== Number(playerData.seat));
+    const allAlivePlayers = Object.values(room?.players || {}).filter((player) => player.isAlive !== false && !player.kicked);
     const buildChoiceButtons = (options, onClick, lockOnSelection = false, disabled = false) => {
         const container = document.createElement('div');
         container.className = 'action-list';
@@ -125,7 +194,7 @@ function showPlayerActions(room, playerId, playerData, roleKey) {
         }
 
         const currentTarget = Number(room.nightActions?.hunterShotTarget || 0);
-        const buttons = buildChoiceButtons(alivePlayers.map((player) => ({
+        const buttons = buildChoiceButtons(allAlivePlayers.map((player) => ({
             label: `${player.name}（座位 ${player.seat}）`,
             value: Number(player.seat),
             selected: currentTarget === Number(player.seat)
@@ -156,7 +225,7 @@ function showPlayerActions(room, playerId, playerData, roleKey) {
         }
 
         const currentTarget = Number(room.nightActions?.wolfKillTarget);
-        const buttons = buildChoiceButtons(alivePlayers.map((player) => ({
+        const buttons = buildChoiceButtons(allAlivePlayers.map((player) => ({
             label: `${player.name}（座位 ${player.seat}）`,
             value: Number(player.seat),
             selected: currentTarget === Number(player.seat)
@@ -254,7 +323,13 @@ function showPlayerActions(room, playerId, playerData, roleKey) {
     }
 
     if (phase === 'DAY_DISCUSSION') {
-        actionContent.innerHTML = '<p class="empty-row">請自由討論，確認要投票的對象。</p>';
+        const speaker = room.players?.[room.currentSpeakerId];
+        const note = document.createElement('p');
+        note.className = 'empty-row';
+        note.textContent = room.currentSpeakerId === playerId
+            ? `現在輪到你發言，剩餘時間請看倒數計時。`
+            : `目前由 ${speaker?.name || '玩家'}（座位 ${speaker?.seat || '--'}）發言，請依序等待。`;
+        actionContent.appendChild(note);
         return;
     }
 
@@ -264,7 +339,7 @@ function showPlayerActions(room, playerId, playerData, roleKey) {
             return;
         }
         const currentVote = Number(room.votes?.[playerId] || 0);
-        const buttons = buildChoiceButtons(alivePlayers.map((player) => ({
+        const buttons = buildChoiceButtons(allAlivePlayers.map((player) => ({
             label: `${player.name}（座位 ${player.seat}）`,
             value: Number(player.seat),
             selected: currentVote === Number(player.seat)
@@ -276,7 +351,11 @@ function showPlayerActions(room, playerId, playerData, roleKey) {
     }
 
     if (phase === 'DAY_RESULT') {
-        actionContent.innerHTML = `<p class="empty-row">${room.lastEvent || '白天結果已公布。'}</p>`;
+        const event = document.createElement('p');
+        event.className = 'empty-row';
+        event.textContent = room.lastEvent || '白天結果已公布。';
+        actionContent.appendChild(event);
+        appendVoteResults(actionContent, room);
         return;
     }
 
@@ -332,6 +411,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const dayChatForm = document.getElementById('day-chat-form');
     const dayChatInput = document.getElementById('day-chat-input');
     const dayChatSend = document.getElementById('day-chat-send');
+    const finalRolesPanel = document.getElementById('final-roles-panel');
+    const finalRolesList = document.getElementById('final-roles-list');
 
     if (!roomId || !playerName) {
         if (messageBox) {
@@ -420,15 +501,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     bindChatForm(wolfChatForm, wolfChatInput, wolfChatSend, wolfChatRef, () => canUseWolfChat, '狼人頻道');
     bindChatForm(dayChatForm, dayChatInput, dayChatSend, dayChatRef, () => canUseDayChat, '白天對話');
 
-    const setChatAccess = (wolfAccess, dayAccess) => {
+    const setChatAccess = (wolfAccess, dayAccess, daySendAccess = dayAccess) => {
         canUseWolfChat = wolfAccess;
-        canUseDayChat = dayAccess;
+        canUseDayChat = daySendAccess;
         wolfChatPanel.hidden = !wolfAccess;
         wolfChatInput.disabled = !wolfAccess;
         wolfChatSend.disabled = !wolfAccess || !wolfChatInput.value.trim();
         dayChatPanel.hidden = !dayAccess;
-        dayChatInput.disabled = !dayAccess;
-        dayChatSend.disabled = !dayAccess || !dayChatInput.value.trim();
+        dayChatInput.disabled = !daySendAccess;
+        dayChatSend.disabled = !daySendAccess || !dayChatInput.value.trim();
 
         if (wolfAccess && !stopWolfChatListener) {
             stopWolfChatListener = onValue(query(wolfChatRef, orderByKey(), limitToLast(50)), (snapshot) => {
@@ -488,16 +569,51 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
         const activePlayer = Boolean(currentPlayer) && currentPlayer.isAlive !== false && !currentPlayer.kicked;
-        const canUseWolfChannel = room.status === 'PLAYING' && privateRole === 'WEREWOLF' && activePlayer;
+        const canUseWolfChannel = room.status === 'PLAYING'
+            && ['NIGHT_WOLVES', 'NIGHT_GODS'].includes(room.phase)
+            && privateRole === 'WEREWOLF'
+            && activePlayer;
         const canUsePublicChat = room.status === 'PLAYING' && room.phase === 'DAY_DISCUSSION' && activePlayer;
-        setChatAccess(canUseWolfChannel, canUsePublicChat);
+        const canSpeakPublicly = canUsePublicChat && room.currentSpeakerId === currentPlayerId;
+        setChatAccess(canUseWolfChannel, canUsePublicChat, canSpeakPublicly);
+        renderPlayerList(room.players || {}, currentPlayerId, room);
+
+        finalRolesPanel.hidden = room.status !== 'ENDED';
+        if (room.status === 'ENDED') {
+            finalRolesList.replaceChildren(...Object.entries(room.players || {})
+                .sort(([, first], [, second]) => Number(first.seat) - Number(second.seat))
+                .map(([playerId, player]) => {
+                    const item = document.createElement('li');
+                    item.className = 'player-mini-card';
+                    const seat = document.createElement('span');
+                    const name = document.createElement('span');
+                    const role = document.createElement('span');
+                    seat.className = 'seat-label';
+                    seat.textContent = String(player.seat || '--');
+                    name.className = 'player-name';
+                    name.textContent = player.name || '匿名玩家';
+                    role.className = 'mini-state';
+                    role.textContent = ROLES[room.privateRoles?.[playerId]]?.name || '未知職業';
+                    item.append(seat, name, role);
+                    return item;
+                }));
+        }
 
         if (room.status === 'ENDED') {
             const winnerText = room.lastEvent || '遊戲結束。';
             messageBox.textContent = `房間已結束，${winnerText}`;
+            phaseLabel.textContent = PHASE_LABELS.GAME_OVER;
             if (roleTitle) roleTitle.textContent = '遊戲結束';
             if (roleDescription) roleDescription.textContent = winnerText;
             if (revealButton) revealButton.hidden = true;
+            const actionContent = document.getElementById('action-content');
+            actionContent.replaceChildren();
+            document.getElementById('action-title').textContent = PHASE_LABELS.GAME_OVER;
+            const event = document.createElement('p');
+            event.className = 'empty-row';
+            event.textContent = winnerText;
+            actionContent.appendChild(event);
+            appendVoteResults(actionContent, room);
             return;
         }
 
@@ -539,7 +655,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             revealButton.hidden = true;
         }
 
-        renderPlayerList(room.players || {}, currentPlayerId);
         showPlayerActions(room, currentPlayerId, currentPlayer, privateRole || 'VILLAGER');
 
         messageBox.textContent = room.lastEvent || '等待房主開始遊戲。';

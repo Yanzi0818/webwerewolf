@@ -8,7 +8,7 @@ const PHASE_LABELS = {
 	NIGHT_WOLVES: '夜晚・狼人行動',
 	NIGHT_GODS: '夜晚・神職行動',
 	HUNTER_SHOT: '獵人・最後一槍',
-	DAY_DISCUSSION: '白天・自由討論',
+	DAY_DISCUSSION: '白天・輪流發言',
 	DAY_VOTING: '白天・投票放逐',
 	DAY_RESULT: '白天・公布結果',
 	LAST_WORDS: '出局・遺言時間',
@@ -307,11 +307,15 @@ function resolveNight(room) {
 
 	const deadNames = [];
 	const deadPlayerIds = [];
+	const lastWordsPlayerIds = [];
 	for (const [playerId, player] of Object.entries(players)) {
 		if (player.isAlive !== false && deaths.has(Number(player.seat))) {
 			players[playerId] = { ...player, isAlive: false };
 			deadNames.push(player.name);
 			deadPlayerIds.push(playerId);
+			if (Number(room.nightNumber || 1) === 1 && !witchSaved && Number(player.seat) === wolfTargetSeat) {
+				lastWordsPlayerIds.push(playerId);
+			}
 		}
 	}
 
@@ -341,6 +345,7 @@ function resolveNight(room) {
 		witchPotions: potions,
 		hunterPlayerId,
 		deadPlayerIds,
+		lastWordsPlayerIds,
 		message: `${seerSummary} ${summaries.join(' ')}`.trim()
 	};
 }
@@ -358,12 +363,12 @@ function resolveVote(room) {
 	const highestVotes = Math.max(0, ...counts.values());
 	const leaders = [...counts.entries()].filter(([, votes]) => votes === highestVotes);
 	if (highestVotes === 0 || leaders.length !== 1) {
-		return { players, deadPlayerIds: [], hunterPlayerId: null, message: '平票或無有效票數，今日無人出局。' };
+		return { players, deadPlayerIds: [], lastWordsPlayerIds: [], hunterPlayerId: null, message: '平票或無有效票數，今日無人出局。' };
 	}
 
 	const targetSeat = leaders[0][0];
 	const target = Object.entries(players).find(([, player]) => player.isAlive !== false && Number(player.seat) === targetSeat);
-	if (!target) return { players, deadPlayerIds: [], hunterPlayerId: null, message: '今日無人出局。' };
+	if (!target) return { players, deadPlayerIds: [], lastWordsPlayerIds: [], hunterPlayerId: null, message: '今日無人出局。' };
 	const targetPlayerId = target[0];
 	const targetRole = room.privateRoles?.[targetPlayerId];
 	if (targetRole === 'IDIOT' && !players[targetPlayerId].idiotSaved) {
@@ -373,20 +378,52 @@ function resolveVote(room) {
 			idiotSaved: true,
 			canVote: false
 		};
-		return { players, deadPlayerIds: [], hunterPlayerId: null, message: `投票放逐：${target[1].name}（${highestVotes} 票），白癡翻牌免死，失去投票權。` };
+		return { players, deadPlayerIds: [], lastWordsPlayerIds: [], hunterPlayerId: null, message: `投票放逐：${target[1].name}（${highestVotes} 票），白癡翻牌免死，失去投票權。` };
 	}
 	players[target[0]] = { ...target[1], isAlive: false };
 	return {
 		players,
 		deadPlayerIds: [targetPlayerId],
+		lastWordsPlayerIds: [targetPlayerId],
 		hunterPlayerId: targetRole === 'HUNTER' ? targetPlayerId : null,
 		message: `投票放逐：${target[1].name}（${highestVotes} 票）`
 	};
 }
 
-function queueLastWords(room, playerIds, nextPhase) {
+function startDiscussion(room, deadPlayerIds = []) {
+	const playersBySeat = Object.entries(room.players || {})
+		.filter(([, player]) => !player.kicked)
+		.sort(([, first], [, second]) => Number(first.seat) - Number(second.seat));
+	const deadSeats = [...new Set(deadPlayerIds)]
+		.map((playerId) => Number(room.players?.[playerId]?.seat))
+		.filter((seat) => Number.isFinite(seat) && seat > 0)
+		.sort((first, second) => first - second);
+	const startingSeat = Number(room.nightNumber || 1) > 1 && deadSeats.length ? deadSeats[0] : 0;
+	const alivePlayers = playersBySeat.filter(([, player]) => player.isAlive !== false);
+	const discussionOrder = startingSeat
+		? [
+			...alivePlayers.filter(([, player]) => Number(player.seat) > startingSeat),
+			...alivePlayers.filter(([, player]) => Number(player.seat) <= startingSeat)
+		]
+		: alivePlayers;
+	const discussionQueue = discussionOrder.map(([playerId]) => playerId);
+	if (!discussionQueue.length) {
+		return { ...room, phase: 'DAY_VOTING', discussionQueue: [], discussionIndex: 0, currentSpeakerId: null };
+	}
+	const speaker = room.players[discussionQueue[0]];
+	return {
+		...room,
+		phase: 'DAY_DISCUSSION',
+		discussionQueue,
+		discussionIndex: 0,
+		currentSpeakerId: discussionQueue[0],
+		lastEvent: `${speaker.name}（座位 ${speaker.seat}）開始發言。`
+	};
+}
+
+function queueLastWords(room, playerIds, nextPhase, discussionDeaths = playerIds) {
 	const queue = [...new Set(playerIds || [])].filter((playerId) => room.players?.[playerId]?.isAlive === false && !room.kickedPlayers?.[playerId]);
-	if (!queue.length) return { ...room, phase: nextPhase };
+	if (!queue.length) return nextPhase === 'DAY_DISCUSSION' ? startDiscussion(room, discussionDeaths) : { ...room, phase: nextPhase };
 
 	const firstSpeaker = room.players[queue[0]];
 	return {
@@ -396,6 +433,7 @@ function queueLastWords(room, playerIds, nextPhase) {
 		lastWordsIndex: 0,
 		lastWordsPlayerId: queue[0],
 		nextPhaseAfterLastWords: nextPhase,
+		discussionDeaths: nextPhase === 'DAY_DISCUSSION' ? [...new Set(discussionDeaths || [])] : null,
 		lastEvent: `${firstSpeaker.name}（座位 ${firstSpeaker.seat}）正在遺言。`
 	};
 }
@@ -453,6 +491,12 @@ async function startGame(roomRef, room) {
 			lastWordsIndex: null,
 			lastWordsPlayerId: null,
 			nextPhaseAfterLastWords: null,
+			discussionDeaths: null,
+			discussionQueue: null,
+			discussionIndex: null,
+			currentSpeakerId: null,
+			pendingDiscussionDeaths: null,
+			nightNumber: 1,
 			votes: {},
 			lastEvent: '遊戲開始，請所有玩家確認底牌。'
 		};
@@ -469,7 +513,7 @@ async function restartGame(roomRef) {
 	const result = await runTransaction(roomRef, (room) => {
 		if (!room || room.status !== 'ENDED') return;
 
-		const { privateRoles, votes, nightActions, witchPotions, phaseEndsAt, lastEvent, pendingHunterId, phaseAfterHunterShot, lastWordsQueue, lastWordsIndex, lastWordsPlayerId, nextPhaseAfterLastWords, ...waitingRoom } = room;
+		const { privateRoles, votes, nightActions, witchPotions, phaseEndsAt, lastEvent, pendingHunterId, phaseAfterHunterShot, lastWordsQueue, lastWordsIndex, lastWordsPlayerId, nextPhaseAfterLastWords, discussionDeaths, discussionQueue, discussionIndex, currentSpeakerId, pendingDiscussionDeaths, nightNumber, ...waitingRoom } = room;
 		const players = Object.fromEntries(Object.entries(room.players || {}).map(([playerId, player]) => [
 			playerId,
 			{ ...player, isAlive: true, isReady: false, idiotSaved: false, canVote: true, hunterCanShoot: false }
@@ -489,6 +533,12 @@ async function restartGame(roomRef) {
 			lastWordsIndex: null,
 			lastWordsPlayerId: null,
 			nextPhaseAfterLastWords: null,
+			discussionDeaths: null,
+			discussionQueue: null,
+			discussionIndex: null,
+			currentSpeakerId: null,
+			pendingDiscussionDeaths: null,
+			nightNumber: 1,
 			votes: {},
 			lastEvent: '上一局已結束，請所有玩家重新準備。'
 		};
@@ -533,11 +583,38 @@ async function kickPlayer(roomRef, playerId) {
 
 		if (room.status !== 'PLAYING') return nextRoom;
 
+		if (room.phase === 'DAY_DISCUSSION' && room.discussionQueue?.includes(playerId)) {
+			const discussionQueue = room.discussionQueue.filter((id) => id !== playerId);
+			if (!discussionQueue.length) {
+				nextRoom.phase = 'DAY_VOTING';
+				nextRoom.discussionQueue = null;
+				nextRoom.discussionIndex = null;
+				nextRoom.currentSpeakerId = null;
+				nextRoom.lastEvent = '沒有其他存活玩家可發言，進入投票階段。';
+				nextRoom.phaseEndsAt = Date.now() + getPhaseDuration(nextRoom, 'DAY_VOTING') * 1000;
+			} else {
+				const speakerWasKicked = room.currentSpeakerId === playerId;
+				const currentIndex = speakerWasKicked
+					? Math.min(Number(room.discussionIndex || 0), discussionQueue.length - 1)
+					: discussionQueue.indexOf(room.currentSpeakerId);
+				const nextSpeakerId = discussionQueue[Math.max(0, currentIndex)];
+				nextRoom.discussionQueue = discussionQueue;
+				nextRoom.discussionIndex = Math.max(0, currentIndex);
+				nextRoom.currentSpeakerId = nextSpeakerId;
+				if (speakerWasKicked) {
+					const speaker = nextRoom.players[nextSpeakerId];
+					nextRoom.lastEvent = `${speaker.name}（座位 ${speaker.seat}）開始發言。`;
+					nextRoom.phaseEndsAt = Date.now() + getPhaseDuration(nextRoom, 'DAY_DISCUSSION') * 1000;
+				}
+			}
+		}
+
 		if (room.phase === 'HUNTER_SHOT' && room.pendingHunterId === playerId) {
 			const afterShotPhase = room.phaseAfterHunterShot || 'DAY_RESULT';
 			const remainingDeaths = (room.pendingLastWordsQueue || []).filter((id) => id !== playerId);
-			const { pendingHunterId, phaseAfterHunterShot, pendingLastWordsQueue, ...roomWithoutHunter } = nextRoom;
-			nextRoom = queueLastWords(roomWithoutHunter, remainingDeaths, afterShotPhase);
+			const { pendingHunterId, phaseAfterHunterShot, pendingLastWordsQueue, pendingDiscussionDeaths, ...roomWithoutHunter } = nextRoom;
+			nextRoom = queueLastWords(roomWithoutHunter, remainingDeaths, afterShotPhase, pendingDiscussionDeaths);
+			delete nextRoom.pendingDiscussionDeaths;
 			nextRoom.phaseEndsAt = Date.now() + getPhaseDuration(nextRoom, nextRoom.phase) * 1000;
 		}
 
@@ -546,6 +623,10 @@ async function kickPlayer(roomRef, playerId) {
 			if (!remainingQueue.length) {
 				const { lastWordsQueue, lastWordsIndex, lastWordsPlayerId, nextPhaseAfterLastWords, ...roomWithoutWords } = nextRoom;
 				nextRoom = { ...roomWithoutWords, phase: nextPhaseAfterLastWords || 'DAY_RESULT' };
+				if (nextRoom.phase === 'DAY_DISCUSSION') {
+					nextRoom = startDiscussion(nextRoom, room.discussionDeaths);
+					nextRoom.discussionDeaths = null;
+				}
 				nextRoom.phaseEndsAt = Date.now() + getPhaseDuration(nextRoom, nextRoom.phase) * 1000;
 			} else {
 				const currentSpeakerIndex = remainingQueue.indexOf(nextRoom.lastWordsPlayerId);
@@ -553,7 +634,7 @@ async function kickPlayer(roomRef, playerId) {
 					nextRoom.lastWordsQueue = remainingQueue;
 					nextRoom.lastWordsIndex = currentSpeakerIndex;
 				} else {
-					nextRoom = queueLastWords(nextRoom, remainingQueue, nextRoom.nextPhaseAfterLastWords || 'DAY_RESULT');
+					nextRoom = queueLastWords(nextRoom, remainingQueue, nextRoom.nextPhaseAfterLastWords || 'DAY_RESULT', nextRoom.discussionDeaths);
 					nextRoom.phaseEndsAt = Date.now() + getPhaseDuration(nextRoom, 'LAST_WORDS') * 1000;
 				}
 			}
@@ -590,14 +671,35 @@ async function advancePhase(roomRef) {
 			if (resolution.hunterPlayerId) {
 				nextRoom.pendingHunterId = resolution.hunterPlayerId;
 				nextRoom.phaseAfterHunterShot = 'DAY_DISCUSSION';
-				nextRoom.pendingLastWordsQueue = resolution.deadPlayerIds;
+				nextRoom.pendingLastWordsQueue = resolution.lastWordsPlayerIds;
+				nextRoom.pendingDiscussionDeaths = resolution.deadPlayerIds;
 				nextPhase = 'HUNTER_SHOT';
 			} else {
-				nextRoom = queueLastWords(nextRoom, resolution.deadPlayerIds, 'DAY_DISCUSSION');
+				nextRoom = queueLastWords(nextRoom, resolution.lastWordsPlayerIds, 'DAY_DISCUSSION', resolution.deadPlayerIds);
 				nextPhase = nextRoom.phase;
 			}
 		} else if (room.phase === 'DAY_DISCUSSION') {
-			nextPhase = 'DAY_VOTING';
+			const queue = (room.discussionQueue || Object.entries(room.players || {})
+				.filter(([, player]) => player.isAlive !== false && !player.kicked)
+				.sort(([, first], [, second]) => Number(first.seat) - Number(second.seat))
+				.map(([playerId]) => playerId));
+			const currentIndex = Math.max(0, queue.indexOf(room.currentSpeakerId));
+			const nextIndex = currentIndex + 1;
+			if (nextIndex < queue.length) {
+				const nextSpeakerId = queue[nextIndex];
+				const speaker = room.players?.[nextSpeakerId];
+				nextRoom.discussionQueue = queue;
+				nextRoom.discussionIndex = nextIndex;
+				nextRoom.currentSpeakerId = nextSpeakerId;
+				nextRoom.lastEvent = `${speaker?.name || '玩家'}（座位 ${speaker?.seat || '--'}）開始發言。`;
+				nextPhase = 'DAY_DISCUSSION';
+			} else {
+				nextRoom.discussionQueue = null;
+				nextRoom.discussionIndex = null;
+				nextRoom.currentSpeakerId = null;
+				nextRoom.lastEvent = '所有玩家已完成發言，進入投票階段。';
+				nextPhase = 'DAY_VOTING';
+			}
 		} else if (room.phase === 'DAY_VOTING') {
 			const resolution = resolveVote(room);
 			nextRoom.players = resolution.players;
@@ -605,10 +707,10 @@ async function advancePhase(roomRef) {
 			if (resolution.hunterPlayerId) {
 				nextRoom.pendingHunterId = resolution.hunterPlayerId;
 				nextRoom.phaseAfterHunterShot = 'DAY_RESULT';
-				nextRoom.pendingLastWordsQueue = resolution.deadPlayerIds;
+				nextRoom.pendingLastWordsQueue = resolution.lastWordsPlayerIds;
 				nextPhase = 'HUNTER_SHOT';
 			} else {
-				nextRoom = queueLastWords(nextRoom, resolution.deadPlayerIds, 'DAY_RESULT');
+				nextRoom = queueLastWords(nextRoom, resolution.lastWordsPlayerIds, 'DAY_RESULT');
 				nextPhase = nextRoom.phase;
 			}
 		} else if (room.phase === 'HUNTER_SHOT') {
@@ -616,19 +718,20 @@ async function advancePhase(roomRef) {
 			const targetPlayerId = findPlayerIdBySeat(nextRoom.players, targetSeat);
 			const hunterId = room.pendingHunterId;
 			const hunter = hunterId ? nextRoom.players[hunterId] : null;
-			const deadPlayerIds = [...(room.pendingLastWordsQueue || [])];
+			const lastWordsPlayerIds = [...(room.pendingLastWordsQueue || [])];
+			const discussionDeaths = [...(room.pendingDiscussionDeaths || [])];
 			if (targetPlayerId && hunter && room.privateRoles?.[hunterId] === 'HUNTER') {
 				nextRoom.players[targetPlayerId] = { ...nextRoom.players[targetPlayerId], isAlive: false };
-				deadPlayerIds.push(targetPlayerId);
+				discussionDeaths.push(targetPlayerId);
 				nextRoom.lastEvent = `獵人 ${hunter.name} 開槍帶走 ${nextRoom.players[targetPlayerId].name}。`;
 			} else {
 				nextRoom.lastEvent = `獵人 ${hunter?.name || ''} 沒有開槍。`;
 			}
 			const afterShotPhase = room.phaseAfterHunterShot || 'DAY_RESULT';
-			const { pendingHunterId, phaseAfterHunterShot, pendingLastWordsQueue, ...roomWithoutPendingHunter } = nextRoom;
+			const { pendingHunterId, phaseAfterHunterShot, pendingLastWordsQueue, pendingDiscussionDeaths, ...roomWithoutPendingHunter } = nextRoom;
 			nextRoom = roomWithoutPendingHunter;
 			nextRoom.nightActions = { ...room.nightActions, hunterShotTarget: null };
-			nextRoom = queueLastWords(nextRoom, deadPlayerIds, afterShotPhase);
+			nextRoom = queueLastWords(nextRoom, lastWordsPlayerIds, afterShotPhase, discussionDeaths);
 			nextPhase = nextRoom.phase;
 		} else if (room.phase === 'LAST_WORDS') {
 			const queue = room.lastWordsQueue || [];
@@ -642,12 +745,14 @@ async function advancePhase(roomRef) {
 				nextPhase = 'LAST_WORDS';
 			} else {
 				const { lastWordsQueue, lastWordsIndex, lastWordsPlayerId, nextPhaseAfterLastWords, ...roomWithoutLastWords } = nextRoom;
-				nextRoom = { ...roomWithoutLastWords, lastEvent: '遺言時間結束。' };
+				nextRoom = { ...roomWithoutLastWords, discussionDeaths: null, lastEvent: '遺言時間結束。' };
 				nextPhase = room.nextPhaseAfterLastWords || 'DAY_RESULT';
+				if (nextPhase === 'DAY_DISCUSSION') nextRoom = startDiscussion(nextRoom, room.discussionDeaths);
 			}
 		} else if (room.phase === 'DAY_RESULT') {
 			nextRoom.nightActions = { wolfKillTarget: null, witchSave: false, witchPoisonTarget: null, seerCheckTarget: null, hunterShotTarget: null };
 			nextRoom.votes = {};
+			nextRoom.nightNumber = Number(room.nightNumber || 1) + 1;
 			nextPhase = 'NIGHT_WOLVES';
 			nextRoom.lastEvent = '新的一夜開始，請先進入狼人行動階段。';
 		} else {
@@ -680,6 +785,9 @@ function initHostDashboard() {
 	const startButton = document.getElementById('start-game');
 	const advanceButton = document.getElementById('advance-phase');
 	const restartButton = document.getElementById('restart-game');
+	const anonymousVotingInput = document.getElementById('anonymous-voting');
+	const votingSettingState = document.getElementById('voting-setting-state');
+	const votingSettingMessage = document.getElementById('voting-setting-message');
 	const clearRoomButton = document.getElementById('clear-room');
 	const messageElement = document.getElementById('host-message');
 	const connectionNote = document.getElementById('connection-note');
@@ -700,6 +808,26 @@ function initHostDashboard() {
 	}
 
 	const roomRef = ref(db, `rooms/${roomId}`);
+	anonymousVotingInput.addEventListener('change', async () => {
+		const requestedValue = anonymousVotingInput.checked;
+		anonymousVotingInput.disabled = true;
+		try {
+			const result = await runTransaction(roomRef, (room) => {
+				if (!room || room.status !== 'WAITING') return;
+				return { ...room, settings: { ...room.settings, anonymousVoting: requestedValue } };
+			});
+			if (!result.committed) {
+				anonymousVotingInput.checked = Boolean(currentRoom?.settings?.anonymousVoting);
+				votingSettingMessage.textContent = '儲存失敗，只有等待中的房間可修改此設定。';
+			}
+		} catch (error) {
+			console.error('Failed to save anonymous voting setting:', error);
+			anonymousVotingInput.checked = Boolean(currentRoom?.settings?.anonymousVoting);
+			votingSettingMessage.textContent = '匿名投票設定儲存失敗，請確認 Firebase 連線後重試。';
+		} finally {
+			anonymousVotingInput.disabled = currentRoom?.status !== 'WAITING';
+		}
+	});
 	const roleConfiguration = createRoleConfigurationController(async (roleCounts) => {
 		const result = await runTransaction(roomRef, (room) => {
 			if (!room || room.status !== 'WAITING') return;
@@ -770,6 +898,12 @@ function initHostDashboard() {
 		const phaseDeadline = Number(currentRoom.phaseEndsAt || 0);
 		roleConfiguration.load(capacity, currentRoom.settings?.roleCounts, currentRoom.status === 'WAITING');
 		phaseTimeConfiguration.load(currentRoom.settings?.phaseDurations, currentRoom.status === 'WAITING');
+		anonymousVotingInput.checked = Boolean(currentRoom.settings?.anonymousVoting);
+		anonymousVotingInput.disabled = currentRoom.status !== 'WAITING';
+		votingSettingState.textContent = currentRoom.settings?.anonymousVoting ? '已開啟匿名' : '公開投票';
+		votingSettingMessage.textContent = currentRoom.status === 'WAITING'
+			? '可在遊戲開始前調整投票是否匿名。'
+			: `本局${currentRoom.settings?.anonymousVoting ? '已開啟' : '未開啟'}匿名投票。`;
 		if (currentDeadline !== phaseDeadline) currentDeadline = phaseDeadline;
 
 		statusElement.textContent = currentRoom.status === 'ENDED' ? '已結束' : playing ? '進行中' : '等待中';
@@ -783,6 +917,14 @@ function initHostDashboard() {
 		startButton.disabled = players.length !== capacity || readyCount !== capacity || !roleConfiguration.isReady();
 		advanceButton.disabled = !playing;
 		advanceButton.hidden = !playing;
+		if (phase === 'DAY_DISCUSSION') {
+			const discussionQueue = currentRoom.discussionQueue || [];
+			advanceButton.textContent = Number(currentRoom.discussionIndex || 0) + 1 >= discussionQueue.length
+				? '發言結束，進入投票'
+				: '結束發言，下一位';
+		} else {
+			advanceButton.textContent = '進入下一階段';
+		}
 		playerList.replaceChildren(...playerEntries.map(([playerId, player]) => {
 			const item = document.createElement('li');
 			const seat = document.createElement('strong');
@@ -800,7 +942,12 @@ function initHostDashboard() {
 				? '已踢出'
 				: player.isAlive === false
 				? playerId === currentRoom.lastWordsPlayerId ? '遺言中' : '出局'
-				: playing ? '在場' : player.isReady ? '已準備' : '未準備';
+				: playing && currentRoom.phase === 'DAY_DISCUSSION' && currentRoom.currentSpeakerId === playerId
+				? '發言中'
+				: playing ? '存活' : player.isReady ? '已準備' : '未準備';
+			if (playing && currentRoom.phase === 'DAY_DISCUSSION' && currentRoom.currentSpeakerId === playerId) {
+				state.classList.add('is-speaking');
+			}
 			kickButton.type = 'button';
 			kickButton.className = 'btn btn-danger btn-compact kick-player-button';
 			kickButton.textContent = '踢出';
@@ -882,8 +1029,12 @@ document.addEventListener('DOMContentLoaded', () => {
 						preset: document.getElementById('preset').value,
 						playerCount,
 						roleCounts: defaultRoleCounts(playerCount),
-						phaseDurations: { ...PHASE_DURATIONS },
-						speechTime: Number(document.getElementById('speech-time').value)
+						phaseDurations: {
+							...PHASE_DURATIONS,
+							DAY_DISCUSSION: Number(document.getElementById('speech-time').value)
+						},
+						speechTime: Number(document.getElementById('speech-time').value),
+						anonymousVoting: false
 					},
 					players: {},
 					kickedPlayers: {},

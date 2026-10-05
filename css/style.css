@@ -600,6 +600,12 @@ body.dark-theme {
     color: #b7f6c5;
 }
 
+.is-speaking {
+    background: rgba(98, 0, 238, 0.2);
+    color: #e2d3ff;
+    font-weight: 700;
+}
+
 .event-log {
     margin-top: 18px;
     background: rgba(255, 255, 255, 0.03);
@@ -707,6 +713,31 @@ body.dark-theme {
     display: flex;
     flex-direction: column;
     gap: 12px;
+}
+
+.vote-results {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-top: 1px solid var(--border-color);
+    padding-top: 12px;
+}
+
+.vote-results h3 {
+    font-size: 1rem;
+}
+
+.vote-result-list {
+    display: grid;
+    gap: 6px;
+    list-style: none;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.vote-result-total {
+    color: var(--text-color);
+    font-weight: 700;
 }
 
 .action-list {

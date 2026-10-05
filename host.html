@@ -142,7 +142,7 @@
 						<div><input id="duration-hunter" data-phase-duration="HUNTER_SHOT" type="number" min="5" max="600" step="1"><span>秒</span></div>
 					</div>
 					<div class="phase-duration-field">
-						<label for="duration-discussion">自由討論</label>
+						<label for="duration-discussion">每人發言</label>
 						<div><input id="duration-discussion" data-phase-duration="DAY_DISCUSSION" type="number" min="5" max="600" step="1"><span>秒</span></div>
 					</div>
 					<div class="phase-duration-field">
@@ -163,6 +163,20 @@
 				<p class="panel-copy" id="phase-time-message">開始遊戲前可調整每個階段的倒數時間。</p>
 				<button class="btn btn-primary" id="save-phase-times" type="button" disabled>儲存階段時間</button>
 			</div>
+		</section>
+		<section class="panel voting-settings" aria-labelledby="voting-settings-title">
+			<div class="panel-heading">
+				<div>
+					<p class="eyebrow">房間設定</p>
+					<h2 id="voting-settings-title">投票設定</h2>
+				</div>
+				<span class="status-pill" id="voting-setting-state">載入中</span>
+			</div>
+			<label class="role-toggle" for="anonymous-voting">
+				<input id="anonymous-voting" type="checkbox">
+				<span>是否開啟匿名投票（公布結果時不顯示投票者）</span>
+			</label>
+			<p class="panel-copy" id="voting-setting-message">可在遊戲開始前調整投票是否匿名。</p>
 		</section>
 		<p class="connection-note" id="connection-note" role="status" aria-live="polite"></p>
 	</main>
